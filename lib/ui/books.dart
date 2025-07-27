@@ -1,10 +1,12 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/widgets.dart' as fw;
 import 'package:epubx/epubx.dart';
 import 'package:file_picker/file_picker.dart';
-import 'package:path_provider/path_provider.dart';
-import 'package:permission_handler/permission_handler.dart';
 import 'dart:io';
 import 'dart:typed_data';
+import 'package:path_provider/path_provider.dart';
+import 'package:path/path.dart' as path;
+import 'package:image/image.dart' as img;
 
 class BooksScreen extends StatefulWidget {
   const BooksScreen({super.key});
@@ -14,169 +16,165 @@ class BooksScreen extends StatefulWidget {
 }
 
 class _BooksScreenState extends State<BooksScreen> {
-  List<EpubBook> _books = [];
-  bool _isLoading = false;
-  String? _errorMessage;
+  List<EpubBook> books = [];
+  List<String> coverImagePaths = [];
+  bool isLoading = false;
+  String? errorMessage;
 
-Future<void> _pickAndReadEpub() async {
-  try {
+  Future<void> pickAndReadEpub() async {
     setState(() {
-      _isLoading = true;
-      _errorMessage = null;
+      isLoading = true;
+      errorMessage = null;
     });
 
-    // Request storage permission (for Android)
-    /*if (Platform.isAndroid) {
-      final status = await Permission.storage.request();
-      if (!status.isGranted) {
-        setState(() {
-          _errorMessage = 'Storage permission denied';
-        });
-        return;
-      }
-    }*/
-
-    // Pick EPUB file
-    FilePickerResult? result = await FilePicker.platform.pickFiles(
-      type: FileType.custom,
-      allowedExtensions: ['epub'],
-      allowMultiple: false,
-    );
-
-    if (result == null) return; // User canceled
-
-    PlatformFile file = result.files.first;
-    if (file.path == null && file.bytes == null) {
-      setState(() {
-        _errorMessage = 'No file data available';
-      });
-      return;
-    }
-
-    Uint8List epubBytes;
-    if (file.bytes != null) {
-      // Use bytes directly if available
-      epubBytes = file.bytes!;
-    } else {
-      // Fallback to file path reading
-      try {
-        epubBytes = await File(file.path!).readAsBytes();
-      } catch (e) {
-        setState(() {
-          _errorMessage = 'Failed to read file: ${e.toString()}';
-        });
-        return;
-      }
-    }
-
-    // Parse EPUB
     try {
-      EpubBook epubBook = await EpubReader.readBook(epubBytes);
+      final result = await FilePicker.platform.pickFiles(
+        type: FileType.custom,
+        allowedExtensions: ['epub'],
+      );
+      if (result == null) return;
+
+      final file = result.files.first;
+      final epubBytes = file.bytes ?? await File(file.path!).readAsBytes();
+      final epubBook = await EpubReader.readBook(epubBytes);
+
+      final coverImagePath = await _saveCoverImage(epubBook);
+
       setState(() {
-        _books.add(epubBook);
+        books.add(epubBook);
+        coverImagePaths.add(coverImagePath);
       });
     } catch (e) {
-      setState(() {
-        _errorMessage = 'Invalid EPUB file: ${e.toString()}';
-      });
+      setState(() => errorMessage = 'Error: ${e.toString()}');
+      debugPrint('Error: $e');
+    } finally {
+      setState(() => isLoading = false);
     }
-  } catch (e) {
-    setState(() {
-      _errorMessage = 'Error: ${e.toString()}';
-    });
-    debugPrint('Error in _pickAndReadEpub: $e');
-  } finally {
-    setState(() {
-      _isLoading = false;
-    });
   }
-}
 
-Future<Uint8List?> _getFileBytes(String path) async {
-  try {
-    if (path.startsWith('content://')) {
-      // Handle content URI for Android
-      final file = File(path);
-      return await file.readAsBytes();
-    } else {
-      // Regular file path
-      return await File(path).readAsBytes();
+  Future<String> _saveCoverImage(EpubBook book) async {
+    try {
+      final img.Image? coverImage = book.CoverImage;
+      if (coverImage == null) return '';
+
+      final Uint8List encodedBytes = Uint8List.fromList(img.encodeJpg(coverImage));
+
+      final appDir = await getApplicationDocumentsDirectory();
+      final coversDir = Directory(path.join(appDir.path, 'covers'));
+
+      if (!await coversDir.exists()) {
+        await coversDir.create(recursive: true);
+      }
+
+      final timestamp = DateTime.now().millisecondsSinceEpoch;
+      final filename = 'cover_$timestamp.jpg';
+      final filePath = path.join(coversDir.path, filename);
+
+      final file = File(filePath);
+      await file.writeAsBytes(encodedBytes);
+
+      return filePath;
+    } catch (e) {
+      debugPrint('Error saving cover image: $e');
+      return '';
     }
-  } catch (e) {
-    debugPrint('File reading error: $e');
-    return null;
   }
-}
 
-  Widget _buildBookItem(EpubBook book) {
+  Widget buildBookItem(int index) {
+    final book = books[index];
+    final coverPath = coverImagePaths[index];
+
     return Card(
       elevation: 3,
-      child: Padding(
-        padding: const EdgeInsets.all(12.0),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const SizedBox(height: 12),
-            Text(
-              book.Title ?? '未知书名',
-              style: const TextStyle(
-                fontSize: 16,
-                fontWeight: FontWeight.bold,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(20.0),
+      ),
+      clipBehavior: Clip.antiAlias, // 重要：确保圆角裁剪有效
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (coverPath.isNotEmpty)
+            ClipRRect(
+              borderRadius: const BorderRadius.only(
+                topLeft: Radius.circular(20.0),
+                topRight: Radius.circular(20.0),
               ),
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
-            ),
-            const SizedBox(height: 4),
-            if (book.Author != null)
-              Text(
-                book.Author!,
-                style: TextStyle(
-                  fontSize: 14,
-                  color: Colors.grey[600],
+              child: fw.Image.file(
+                File(coverPath),
+                height: 160,
+                width: double.infinity,
+                fit: BoxFit.cover,
+                errorBuilder: (context, error, stackTrace) => Container(
+                  height: 160,
+                  color: Colors.grey[200],
+                  child: const Icon(Icons.book, size: 60),
                 ),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
               ),
-          ],
-        ),
+            )
+          else
+            Container(
+              height: 160,
+              width: double.infinity,
+              decoration: BoxDecoration(
+                color: Colors.grey[200],
+                borderRadius: const BorderRadius.only(
+                  topLeft: Radius.circular(20.0),
+                  topRight: Radius.circular(20.0),
+                ),
+              ),
+              child: const Center(child: Icon(Icons.book, size: 60)),
+            ),
+          Padding(
+            padding: const EdgeInsets.all(12),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  book.Title ?? '未知书名',
+                  style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                if (book.Author != null)
+                  Text(
+                    book.Author!,
+                    style: TextStyle(fontSize: 14, color: Colors.grey[600]),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+              ],
+            ),
+          )
+        ],
       ),
-    );
-  }
-
-  Widget _listView() {
-    return GridView.builder(
-      padding: const EdgeInsets.all(16),
-      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-        crossAxisCount: 2,
-        crossAxisSpacing: 16,
-        mainAxisSpacing: 16,
-        childAspectRatio: 0.7,
-      ),
-      itemCount: _books.length,
-      itemBuilder: (context, index) {
-        return _buildBookItem(_books[index]);
-      },
     );
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('书籍'),
-      ),
+      appBar: AppBar(title: const Text('书籍')),
       floatingActionButton: FloatingActionButton(
-        onPressed: _pickAndReadEpub,
-        tooltip: 'Add',
+        onPressed: pickAndReadEpub,
         child: const Icon(Icons.add),
       ),
-      body: _isLoading
+      body: isLoading
           ? const Center(child: CircularProgressIndicator())
-          : _errorMessage != null
-              ? Center(child: Text(_errorMessage!))
-              : _books.isEmpty
+          : errorMessage != null
+              ? Center(child: Text(errorMessage!))
+              : books.isEmpty
                   ? const Center(child: Text('暂无书籍'))
-                  : _listView(),
+                  : GridView.builder(
+                      padding: const EdgeInsets.all(16),
+                      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                        crossAxisCount: 2,
+                        crossAxisSpacing: 16,
+                        mainAxisSpacing: 16,
+                        childAspectRatio: 0.65,
+                      ),
+                      itemCount: books.length,
+                      itemBuilder: (_, index) => buildBookItem(index),
+                    ),
     );
   }
 }
