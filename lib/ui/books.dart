@@ -26,7 +26,7 @@ Future<void> _pickAndReadEpub() async {
     });
 
     // Request storage permission (for Android)
-    if (Platform.isAndroid) {
+    /*if (Platform.isAndroid) {
       final status = await Permission.storage.request();
       if (!status.isGranted) {
         setState(() {
@@ -34,7 +34,7 @@ Future<void> _pickAndReadEpub() async {
         });
         return;
       }
-    }
+    }*/
 
     // Pick EPUB file
     FilePickerResult? result = await FilePicker.platform.pickFiles(
