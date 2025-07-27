@@ -7,6 +7,8 @@ import 'dart:typed_data';
 import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as path;
 import 'package:image/image.dart' as img;
+import 'package:crypto/crypto.dart'; // 加入依赖：crypto: ^3.0.3
+import 'dart:convert';
 
 class BooksScreen extends StatefulWidget {
   const BooksScreen({super.key});
@@ -16,10 +18,14 @@ class BooksScreen extends StatefulWidget {
 }
 
 class _BooksScreenState extends State<BooksScreen> {
-  List<EpubBook> books = [];
-  List<String> coverImagePaths = [];
+  Map<String, EpubBook> books = {};
+  Map<String, String> coverImagePaths = {};
   bool isLoading = false;
   String? errorMessage;
+
+  String computeHash(Uint8List bytes) {
+    return sha1.convert(bytes).toString();
+  }
 
   Future<void> pickAndReadEpub() async {
     setState(() {
@@ -36,13 +42,21 @@ class _BooksScreenState extends State<BooksScreen> {
 
       final file = result.files.first;
       final epubBytes = file.bytes ?? await File(file.path!).readAsBytes();
-      final epubBook = await EpubReader.readBook(epubBytes);
+      final hash = computeHash(epubBytes);
 
-      final coverImagePath = await _saveCoverImage(epubBook);
+      if (books.containsKey(hash)) {
+        setState(() {
+          errorMessage = '该书已导入';
+        });
+        return;
+      }
+
+      final epubBook = await EpubReader.readBook(epubBytes);
+      final coverImagePath = await _saveCoverImage(epubBook, hash);
 
       setState(() {
-        books.add(epubBook);
-        coverImagePaths.add(coverImagePath);
+        books[hash] = epubBook;
+        coverImagePaths[hash] = coverImagePath;
       });
     } catch (e) {
       setState(() => errorMessage = 'Error: ${e.toString()}');
@@ -52,12 +66,10 @@ class _BooksScreenState extends State<BooksScreen> {
     }
   }
 
-  Future<String> _saveCoverImage(EpubBook book) async {
+  Future<String> _saveCoverImage(EpubBook book, String hash) async {
     try {
       final img.Image? coverImage = book.CoverImage;
       if (coverImage == null) return '';
-
-      final Uint8List encodedBytes = Uint8List.fromList(img.encodeJpg(coverImage));
 
       final appDir = await getApplicationDocumentsDirectory();
       final coversDir = Directory(path.join(appDir.path, 'covers'));
@@ -66,11 +78,15 @@ class _BooksScreenState extends State<BooksScreen> {
         await coversDir.create(recursive: true);
       }
 
-      final timestamp = DateTime.now().millisecondsSinceEpoch;
-      final filename = 'cover_$timestamp.jpg';
+      final filename = 'cover_$hash.jpg';
       final filePath = path.join(coversDir.path, filename);
-
       final file = File(filePath);
+
+      if (await file.exists()) {
+        return filePath; // 如果文件已存在，不再重复写入
+      }
+
+      final encodedBytes = Uint8List.fromList(img.encodeJpg(coverImage));
       await file.writeAsBytes(encodedBytes);
 
       return filePath;
@@ -80,16 +96,13 @@ class _BooksScreenState extends State<BooksScreen> {
     }
   }
 
-  Widget buildBookItem(int index) {
-    final book = books[index];
-    final coverPath = coverImagePaths[index];
-
+  Widget buildBookItem(EpubBook book, String coverPath) {
     return Card(
       elevation: 3,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(20.0),
       ),
-      clipBehavior: Clip.antiAlias, // 重要：确保圆角裁剪有效
+      clipBehavior: Clip.antiAlias,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -173,7 +186,12 @@ class _BooksScreenState extends State<BooksScreen> {
                         childAspectRatio: 0.65,
                       ),
                       itemCount: books.length,
-                      itemBuilder: (_, index) => buildBookItem(index),
+                      itemBuilder: (_, index) {
+                        final hash = books.keys.elementAt(index);
+                        final book = books[hash]!;
+                        final coverPath = coverImagePaths[hash]!;
+                        return buildBookItem(book, coverPath);
+                      },
                     ),
     );
   }
